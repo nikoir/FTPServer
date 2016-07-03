@@ -1,0 +1,5 @@
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x86\Debug\FTPServer.exe.config
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x86\Debug\FTPServer.exe
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x86\Debug\FTPServer.pdb
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\obj\x86\Debug\FTPServer.exe
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\obj\x86\Debug\FTPServer.pdb

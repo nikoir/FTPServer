@@ -1,0 +1,12 @@
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x64\Debug\FTPServer.exe.config
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x64\Debug\FTPServer.exe
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\bin\x64\Debug\FTPServer.pdb
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\obj\x64\Debug\FTPServer.exe
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\obj\x64\Debug\FTPServer.pdb
+C:\Users\Николай\Documents\Visual Studio 2013\Projects\FTPServer\FTPServer\obj\x64\Debug\FTPServer.csprojResolveAssemblyReference.cache
+C:\Users\Николай\Documents\FTPServer\FTPServer\bin\x64\Debug\FTPServer.exe.config
+C:\Users\Николай\Documents\FTPServer\FTPServer\obj\x64\Debug\FTPServer.exe
+C:\Users\Николай\Documents\FTPServer\FTPServer\obj\x64\Debug\FTPServer.pdb
+C:\Users\Николай\Documents\FTPServer\FTPServer\bin\x64\Debug\FTPServer.exe
+C:\Users\Николай\Documents\FTPServer\FTPServer\bin\x64\Debug\FTPServer.pdb
+C:\Users\Николай\Documents\FTPServer\FTPServer\obj\x64\Debug\FTPServer.csprojResolveAssemblyReference.cache
