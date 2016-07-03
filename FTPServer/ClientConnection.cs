@@ -4,7 +4,9 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,7 +17,7 @@ namespace FTPServer
     {
         Active, Passive
     }
-    class ClientConnection
+    class ClientConnection : IDisposable
     {
         private TcpClient _controlClient;
         private TcpClient _dataClient; //объект, используемый для передачи данных с помощью пассивного режима
@@ -31,15 +33,24 @@ namespace FTPServer
         private string _username;
         private string _transferType; //тип передачи данных (реализован I - двоичный тип передачи)
         private string _currentDirectory = "C:\\ftp_server"; //текущая папка с которой работает клиент
-        private string _root = "C:\\ftp_server"; //корневой элемент
-        private string _dumpFolder = "C:\\ftp_server\\dump"; //папка для сохранения удаленных файлов
+        private string _root = null; //корневой элемент
+        private string _dumpFolder = null; //папка для сохранения удаленных файлов
         private StreamReader _dataReader;
         private StreamWriter _dataWriter;
+        private X509Certificate2 _cert = null;
+        private SslStream _sslStream;
+        private bool _disposed = false;
+        private List<string> _validCommands = new List<string>();
+        private UserStore _currentUser;
 
-        private class DataConnectionOperation
+        private string CheckUser()
         {
-            public Func<NetworkStream, string, string> Operation { get; set; }
-            public string Arguments { get; set; }
+            if (_currentUser == null)
+            {
+                return "530 Not logged in";
+            }
+
+            return null;
         }
 
         public ClientConnection(TcpClient client)
@@ -58,7 +69,10 @@ namespace FTPServer
             _controlWriter.WriteLine("220 Service Ready.");
             _controlWriter.Flush();
 
+            string renameFrom = null;
             string line = null;
+
+            _validCommands.AddRange(new string[] { "AUTH", "USER", "PASS", "QUIT", "HELP", "NOOP" });
 
             try
             {
@@ -74,6 +88,15 @@ namespace FTPServer
                     if (string.IsNullOrWhiteSpace(arguments))
                         arguments = null;
 
+                    if (!_validCommands.Contains(cmd))
+                    {
+                        response = CheckUser();
+                    }
+
+                    if (cmd != "RNTO")
+                    {
+                        renameFrom = null;
+                    }
                     if (response == null)
                     {
                         switch (cmd)
@@ -85,10 +108,10 @@ namespace FTPServer
                                 response = Password(arguments);
                                 break;
                             case "CWD":
-                                response = ChangeWorkingDirectory(arguments);
+                                response = ChangeWorkingDirectory(arguments); //+
                                 break;
                             case "CDUP":
-                                response = ChangeWorkingDirectory("..");
+                                response = ChangeWorkingDirectory(".."); //+
                                 break;
                             case "PWD":
                                 response = PrintWorkingDirectory();
@@ -107,7 +130,7 @@ namespace FTPServer
                                 response = Port(arguments); //Задаем порт для активного соединения
                                 break;
                             case "LIST":
-                                response = List(arguments);
+                                response = List(arguments); //+
                                 break;
                             case "RETR":
                                 response = Retrieve(arguments);
@@ -124,6 +147,17 @@ namespace FTPServer
                             case "MKD":
                                 response = CreateDir(arguments);
                                 break;
+                            case "RNFR":
+                                renameFrom = arguments;
+                                response = "350 Requested file action pending further information";
+                                break;
+                            case "RNTO":
+                                response = Rename(renameFrom, arguments);
+                                break;
+                            // Extensions defined by rfc 2228
+                            //case "AUTH":
+                            //    response = Auth(arguments);
+                            //    break;
                             default:
                                 response = "502 Command not implemented";
                                 break;
@@ -143,6 +177,17 @@ namespace FTPServer
                         {
                             break;
                         }
+                        //if (cmd == "AUTH")
+                        //{
+                        //    _cert = new X509Certificate2("D:\\Program Files (x86)\\Microsoft Visual Studio 12.0\\VC\\bin\\x86_amd64\\server.pfx", "12345");
+
+                        //    _sslStream = new SslStream(_controlStream, false);
+
+                        //    _sslStream.AuthenticateAsServer(_cert, false, System.Security.Authentication.SslProtocols.Default, false);
+
+                        //    _controlReader = new StreamReader(_sslStream);
+                        //    _controlWriter = new StreamWriter(_sslStream);
+                        //}
                     }
                 }
             }
@@ -151,6 +196,7 @@ namespace FTPServer
                 Console.WriteLine(ex);
                 //throw;
             }
+            Dispose();
         }
 
         #region FTP Commands
@@ -160,8 +206,6 @@ namespace FTPServer
             pathname = NormalizeFilename(pathname);
             if (IsPathValid(pathname))
             {
-                //if (File.Exists(@"D:\Downloads\AC_DC - Rock or Bust (2014)\01. Rock or Bust.mp3")) //- вот так работает
-                //pathname = pathname.Replace("\\", "/");
                 if (File.Exists(pathname))
                 {
                     if (_dataConnectionType == DataConnectionType.Active)
@@ -184,11 +228,17 @@ namespace FTPServer
             byte[] buffer = new byte[bufferSize];
             int count = 0;
             long total = 0;
+            //long _maxFileSize = 314572800;
+            long _maxFileSize = 30720;
 
             while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
             {
                 output.Write(buffer, 0, count);
                 total += count;
+                if (total >= _maxFileSize)
+                {
+                    throw new Exception("550 File size too large.");
+                }
             }
 
             return total;
@@ -206,16 +256,26 @@ namespace FTPServer
 
             string pathname = (string)result.AsyncState;
 
-            using (NetworkStream dataStream = _dataClient.GetStream())
+            try
             {
-                using (FileStream fs = new FileStream(pathname, FileMode.Open, FileAccess.Read))
+                using (NetworkStream dataStream = _dataClient.GetStream())
                 {
-                    CopyStream(fs, dataStream, 4096);
-                    _dataClient.Close();
-                    _dataClient = null;
-                    _controlWriter.WriteLine("226 Closing data connection, file transfer successful");
-                    _controlWriter.Flush();
+                    using (FileStream fs = new FileStream(pathname, FileMode.Open, FileAccess.Read))
+                    {
+                        CopyStream(fs, dataStream, 4096);
+                        _dataClient.Close();
+                        _dataClient = null;
+                        _controlWriter.WriteLine("226 Closing data connection, file transfer successful");
+                        _controlWriter.Flush();
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                _dataClient.Close();
+                _dataClient = null;
+                _controlWriter.WriteLine(ex.Message);
+                _controlWriter.Flush();
             }
         }
 
@@ -229,8 +289,12 @@ namespace FTPServer
 
         private string Password(string password)
         {
-            if (true)
+            string userGroup = UserStore.GetUserGroup(_username, password);
+            if (userGroup != null)
             {
+                _currentUser = new UserStore("C:\\ftp_server", _username, userGroup);
+                _root = _currentUser.UserRoot;
+                _currentDirectory = _root;
                 return "230 User logged in";
             }
             else
@@ -269,7 +333,9 @@ namespace FTPServer
                     if (!IsPathValid(_currentDirectory))
                     {
                         _currentDirectory = _root;
+                        return "550 Access denied or file/folder not found!";
                     }
+                    
                 }
                 else
                 {
@@ -497,6 +563,62 @@ namespace FTPServer
 
             return "550 Directory Not Found";
         }
+        private string Rename(string renameFrom, string renameTo)
+        {
+            if (string.IsNullOrWhiteSpace(renameFrom) || string.IsNullOrWhiteSpace(renameTo))
+            {
+                return "450 Requested file action not taken";
+            }
+
+            renameFrom = NormalizeFilename(renameFrom);
+            renameTo = NormalizeFilename(renameTo);
+
+            if (renameFrom != null && renameTo != null)
+            {
+                if (File.Exists(renameFrom))
+                {
+                    try
+                    {
+                        File.Move(renameFrom, renameTo);
+                    }
+                    catch (Exception)
+                    {
+                        return "450 Requested file action not taken";
+                    }
+                }
+                else if (Directory.Exists(renameFrom))
+                {
+                    try
+                    {
+                        Directory.Move(renameFrom, renameTo);
+                    }
+                    catch (Exception)
+                    {
+                        return "450 Requested file action not taken";
+                    }
+                }
+                else
+                {
+                    return "450 Requested file action not taken";
+                }
+
+                return "250 Requested file action okay, completed";
+            }
+
+            return "450 Requested file action not taken";
+        }
+
+        //private string Auth(string authMode)
+        //{
+        //    if (authMode == "TLS")
+        //    {
+        //        return "234 Enabling TLS Connection";
+        //    }
+        //    else
+        //    {
+        //        return "504 Unrecognized AUTH mode";
+        //    }
+        //}
         #endregion
 
         private void DoList(IAsyncResult result)
@@ -572,7 +694,7 @@ namespace FTPServer
 
         private bool IsPathValid(string pathname)
         {
-            return pathname.StartsWith(_root);
+            return pathname.StartsWith(_currentUser.UserRoot);
         }
 
         private string NormalizeFilename(string path)
@@ -608,6 +730,33 @@ namespace FTPServer
             return IsPathValid(path) ? path : null;
         }
 
+        //private bool HasAccessToDirectory(string path)
+        //{
+        //    if (path.StartsWith(_currentUser.UserRoot))
+        //    {
+        //        DirectoryInfo Info = new DirectoryInfo(path);
+
+        //        if (Info.Exists)
+        //        {
+        //            int index1 = _currentUser.UserRoot.Length - 1;
+        //            int index2 = path.IndexOf("private");
+        //            if (index2 == -1)
+        //                return true;
+        //            if (index2 < index1)
+        //                return true;
+        //            string UserName = path.Substring(index1 + 2, index2 + 1);
+        //            if (UserName == _currentUser.UserName)
+        //                return true;
+        //            return false;
+        //        }
+        //        else
+        //            return false;
+        //    }
+        //    else
+        //        return false;
+
+        //}
+
         private void DoDataConnectionOperation(IAsyncResult result)
         {
             if (_dataConnectionType == DataConnectionType.Active)
@@ -620,16 +769,27 @@ namespace FTPServer
             }
 
             string pathname = (string)result.AsyncState;
-
-            using (NetworkStream dataStream = _dataClient.GetStream())
+            try
             {
-                SaveFile(dataStream, 4096, pathname);
-            }
-            _dataClient.Close();
-            _dataClient = null;
+                using (NetworkStream dataStream = _dataClient.GetStream())
+                {
+                    SaveFile(dataStream, 4096, pathname);
+                }
+                _dataClient.Close();
+                _dataClient = null;
 
-            _controlWriter.WriteLine("226 Closing data connection, file transfer successful");
-            _controlWriter.Flush();
+                _controlWriter.WriteLine("226 Closing data connection, file transfer successful");
+                _controlWriter.Flush();
+            }
+            catch (Exception ex)
+            {
+                _dataClient.Close();
+                _dataClient = null;
+                File.Delete(pathname);
+                _controlWriter.WriteLine(ex.Message);
+                _controlWriter.Flush();
+            }
+
         }
 
         private void SaveFile(Stream dataStream, int bufferSize, string pathname)
@@ -652,5 +812,50 @@ namespace FTPServer
             }
             return CurDateTime;
         }
+
+        #region IDisposable
+
+        public void Dispose()
+        {
+            Dispose(true);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    if (_controlClient != null)
+                    {
+                        _controlClient.Close();
+                    }
+
+                    if (_dataClient != null)
+                    {
+                        _dataClient.Close();
+                    }
+
+                    if (_controlStream != null)
+                    {
+                        _controlStream.Close();
+                    }
+
+                    if (_controlReader != null)
+                    {
+                        _controlReader.Close();
+                    }
+
+                    if (_controlWriter != null)
+                    {
+                        _controlWriter.Close();
+                    }
+                }
+            }
+
+            _disposed = true;
+        }
+
+        #endregion
     }
 }

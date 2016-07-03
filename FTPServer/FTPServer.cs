@@ -11,7 +11,9 @@ namespace FTPServer
 {
     class FTPServer
     {
+        private bool _disposed = false;
         private TcpListener _listener;
+        private List<ClientConnection> _activeConnections;
 
         public FTPServer()
         {
@@ -21,6 +23,7 @@ namespace FTPServer
         {
             _listener = new TcpListener(IPAddress.Any, 21);
             _listener.Start();
+            _activeConnections = new List<ClientConnection>();
             _listener.BeginAcceptTcpClient(HandleAcceptTcpClient, _listener);
             Console.WriteLine("Server started.");
         }
@@ -41,8 +44,27 @@ namespace FTPServer
             Console.WriteLine(client.Client.RemoteEndPoint + " connected.");
 
             ClientConnection connection = new ClientConnection(client);
+            _activeConnections.Add(connection);
 
             ThreadPool.QueueUserWorkItem(connection.HandleClient, client);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    Stop();
+
+                    foreach (ClientConnection conn in _activeConnections)
+                    {
+                        conn.Dispose();
+                    }
+                }
+            }
+
+            _disposed = true;
         }
     }
 }
